@@ -1,37 +1,13 @@
-#!/bin/bash
-# -----------------------------------------------------------------------------
-# Leviathan - The Omega Edition - v5.0.0
-#
-# A comprehensive Bash script for advanced system administration, security
-# hardening, performance tuning, and future planning. This framework is
-# designed to be the ultimate all-in-one tool for Linux power users,
-# system administrators, and security professionals.
-#
-# This version introduces a new philosophy: "Self Health and More Futures",
-# focusing not just on the machine's health, but the operator's as well,
-# while providing tools to plan for the system's future.
-#
-# Author: Your Name
-# GitHub: https://github.com/YOUR_GITHUB_USERNAME/leviathan-script
-# -----------------------------------------------------------------------------
 
-# --- Strict Mode ---
-# -e: exit immediately if a command exits with a non-zero status.
-# -u: treat unset variables as an error when substituting.
-# -o pipefail: the return value of a pipeline is the status of the last
-#              command to exit with a non-zero status, or zero if no
-#              command exited with a non-zero status.
 set -o errexit
 set -o nounset
 set -o pipefail
-
-# --- SECTION 1: GLOBAL CONFIGURATION & STATE ---
 
 # --- Script Metadata ---
 readonly SCRIPT_VERSION="5.0.0"
 readonly SCRIPT_NAME=$(basename "$0")
 readonly SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-readonly GITHUB_REPO="YOUR_GITHUB_USERNAME/leviathan-script" # IMPORTANT: Set this!
+readonly GITHUB_REPO="Opselon/leviathan-script" # IMPORTANT: Set this!
 
 # --- System & Application Paths ---
 readonly BACKUP_DIR="/var/backups/leviathan/$(date +%Y%m%d_%H%M%S)"
