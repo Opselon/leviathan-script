@@ -1,36 +1,4 @@
-Of course. Here is the revised, high-quality `README.md` presented entirely within a single code block, with all PNG images removed and replaced with text-based alternatives or emojis for a clean, professional look.
 
-```markdown
-<div align="center">
-
-```
-██╗      ███████╗██╗   ██╗██╗ █████╗ ████████╗██╗  ██╗ ███╗   ██╗
-██║      ██╔════╝██║   ██║██║██╔══██╗╚══██╔══╝██║  ██║ ████╗  ██║
-██║      █████╗  ██║   ██║██║███████║   ██║   ███████║ ██╔██╗ ██║
-██║      ██╔══╝  ╚██╗ ██╔╝██║██╔══██║   ██║   ██╔══██║ ██║╚██╗██║
-███████╗ ███████╗ ╚████╔╝ ██║██║  ██║   ██║   ██║  ██║ ██║ ╚████║
-╚══════╝ ╚══════╝  ╚═══╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝ ╚═╝  ╚═══╝
-```
-
-# Leviathan - The Omega Edition
-
-**The Ultimate All-in-One Framework for Linux System Administration, Security, and Future Planning.**
-
-</div>
-
-<p align="center">
-  <a href="https://opensource.org/licenses/MIT">
-    <img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="License: MIT">
-  </a>
-  <a href="https://www.linux.org/">
-    <img src="https://img.shields.io/badge/Platform-Debian/Ubuntu-orange?style=for-the-badge&logo=debian" alt="Platform: Debian/Ubuntu">
-  </a>
-  <a href="https://www.gnu.org/software/bash/">
-    <img src="https://img.shields.io/badge/Shell-BASH-green?style=for-the-badge&logo=gnu-bash" alt="Shell: BASH">
-  </a>
-</p>
-
----
 
 Leviathan is a powerful, menu-driven Bash script designed for system administrators, DevOps engineers, and Linux power users. It consolidates hundreds of commands into a single, intelligent framework, automating complex tasks from security hardening to performance tuning.
 
