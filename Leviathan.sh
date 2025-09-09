@@ -564,16 +564,139 @@ security_hardening_menu() {
 # Returns: None
 # -----------------------------------------------------------------------------
 run_system_cleanup() {
-    print_header "Module: Deep System Cleanup"
-    if ! ask_yes_no "This will permanently remove old logs, caches, and temp files. Proceed?"; then
-        print_warning "Cleanup aborted by user."
-        return
-    fi
-    journalctl --vacuum-time=2weeks &> /dev/null & spinner $! "Cleaning systemd journal (keeping last 2 weeks)..."
-    rm -rf ~/.cache/thumbnails/* &> /dev/null & spinner $! "Clearing user thumbnail cache..."
-    (apt-get clean -y) &> /dev/null & spinner $! "Clearing APT package cache..."
-    find /tmp -type f -delete &> /dev/null & spinner $! "Clearing /tmp directory..."
-    print_success "Deep system cleanup complete."
+    print_header "Module: Interactive Deep System Cleanup"
+
+    # --- Configuration & State ---
+    # Associative array to hold the descriptions of cleanup tasks
+    declare -A tasks
+    tasks[1]="Clean APT package cache (apt-get clean)"
+    tasks[2]="Remove old dependencies & kernels (apt-get autoremove --purge)"
+    tasks[3]="Clean systemd journal logs (keep last 14 days)"
+    tasks[4]="Clean user thumbnail caches (for current & sudo user)"
+    tasks[5]="Prune unused Docker resources (containers, images, networks)"
+    tasks[6]="Clear temporary files from /tmp"
+
+    # Associative array to track which tasks are selected
+    declare -A selected
+    for key in "${!tasks[@]}"; do
+        selected[$key]="false" # Initially, no tasks are selected
+    done
+
+    # --- Helper Functions ---
+
+    # Helper to calculate potential savings
+    _analyze_savings() {
+        print_subheader "Analyzing Potential Space Savings..."
+        local total_savings=0
+        local real_user="${SUDO_USER:-$(whoami)}"
+        local user_home; user_home=$(getent passwd "$real_user" | cut -d: -f6)
+
+        for i in "${!tasks[@]}"; do
+            if [[ "${selected[$i]}" == "true" ]]; then
+                local current_savings=0
+                local size_str="0B"
+                case $i in
+                    1) current_savings=$(du -s /var/cache/apt/archives | awk '{print $1}') ;;
+                    2) print_warning "  - Note: 'autoremove' savings cannot be pre-calculated accurately." ;;
+                    3) current_savings=$(journalctl --disk-usage | grep -oP '\d+(\.\d+)?[A-Z]' | sed 's/B$//; s/K$/\*1024/; s/M$/\*1024\*1024/; s/G$/\*1024\*1024\*1024/' | bc) ;;
+                    4) [[ -d "${user_home}/.cache/thumbnails" ]] && current_savings=$(du -s "${user_home}/.cache/thumbnails" | awk '{print $1}') ;;
+                    5) command -v docker &>/dev/null && current_savings=$(docker system df --format "{{.ReclaimableSpace}}" | head -n1 | numfmt --from=iec) ;;
+                    6) current_savings=$(du -s /tmp | awk '{print $1}') ;;
+                esac
+                
+                # Use bc for safe integer conversion
+                current_savings=$(echo "$current_savings" | bc)
+                if [[ $current_savings -gt 0 ]]; then
+                    size_str=$(_bytes_to_human_readable "$((current_savings * 1024))") # du reports in KB blocks
+                    total_savings=$((total_savings + current_savings))
+                fi
+                printf "  - %-60s ~%s\n" "${tasks[$i]}" "${C_GREEN}${size_str}${C_RESET}"
+            fi
+        done
+        local total_size_str=$(_bytes_to_human_readable "$((total_savings * 1024))")
+        echo "------------------------------------------------------------------------"
+        printf "  ${C_YELLOW}Estimated Total Savings: ~%s${C_RESET}\n" "$total_size_str"
+    }
+
+    # Helper to execute the cleanup
+    _execute_cleanup() {
+        print_subheader "Executing Selected Cleanup Tasks..."
+        local real_user="${SUDO_USER:-$(whoami)}"
+        local user_home; user_home=$(getent passwd "$real_user" | cut -d: -f6)
+
+        for i in "${!tasks[@]}"; do
+            if [[ "${selected[$i]}" == "true" ]]; then
+                print_info "Running: ${tasks[$i]}"
+                case $i in
+                    1) apt-get clean -y ;;
+                    2) apt-get autoremove --purge -y ;;
+                    3) journalctl --vacuum-time=2weeks ;;
+                    4) 
+                       print_info "  - Cleaning root's thumbnail cache..."
+                       rm -rf /root/.cache/thumbnails/* &>/dev/null
+                       if [[ -d "$user_home" && "$real_user" != "root" ]]; then
+                           print_info "  - Cleaning ${real_user}'s thumbnail cache..."
+                           rm -rf "${user_home}/.cache/thumbnails/*" &>/dev/null
+                       fi
+                       ;;
+                    5) command -v docker &>/dev/null && docker system prune -af || print_warning "  - Docker not found, skipping." ;;
+                    6) find /tmp -mindepth 1 -delete ;;
+                esac
+                print_success "  - Done."
+            fi
+        done
+        print_header "Cleanup Complete"
+    }
+
+    # --- Main Interactive Loop ---
+    while true; do
+        echo -e "\n${C_CYAN}Select tasks to perform by entering their number. Press Enter to re-display.${C_RESET}"
+        
+        # Display the menu
+        for key in "${!tasks[@]}"; do
+            local checkbox="[ ]"
+            if [[ "${selected[$key]}" == "true" ]]; then
+                checkbox="${C_GREEN}[✔]${C_RESET}"
+            fi
+            printf "  %s %s. %s\n" "$checkbox" "$key" "${tasks[$key]}"
+        done
+
+        echo -e "\n${C_MAGENTA}--- Actions ---${C_RESET}"
+        echo "  (a) Analyze potential savings for selected tasks"
+        echo "  (p) Proceed with cleanup for selected tasks"
+        echo "  (q) Quit / Back to main menu"
+        
+        read -rp "$(echo -e ${C_YELLOW}"Enter number to toggle, or an action [a/p/q]: "${C_RESET})" choice
+
+        case "$choice" in
+            [1-6]) # Toggle selection
+                if [[ "${selected[$choice]}" == "true" ]]; then
+                    selected[$choice]="false"
+                else
+                    selected[$choice]="true"
+                fi
+                ;;
+            a|A) _analyze_savings ;;
+            p|P) 
+                if ! printf '%s\n' "${selected[@]}" | grep -q "true"; then
+                    print_warning "No tasks were selected. Nothing to do."
+                else
+                    if ask_yes_no "This will permanently delete files based on your selections. Are you sure?"; then
+                        _execute_cleanup
+                        break # Exit loop after cleanup
+                    else
+                        print_warning "Cleanup aborted by user."
+                    fi
+                fi
+                ;;
+            q|Q) 
+                print_info "Returning to main menu."
+                return 
+                ;;
+            "") continue ;; # Just refresh the menu
+            *) print_error "Invalid selection." ;;
+        esac
+    done
 }
 
 # --- SECTION 9: MODULE - DIAGNOSTICS & REPAIR ---
@@ -585,28 +708,185 @@ run_system_cleanup() {
 # Parameters: None
 # Returns: None
 # -----------------------------------------------------------------------------
-run_diagnostics_repair() {
-    print_header "Module: Diagnostics & Repair"
-    print_subheader "Checking for broken APT packages..."
-    if apt-get check &> /tmp/apt_check.log; then
-        print_success "No broken packages found."
-    else
-        print_error "Broken packages detected. Attempting to fix..."
-        (dpkg --configure -a) &> /dev/null & spinner $! "Reconfiguring packages..."
-        (apt-get install -f -y) &> /dev/null & spinner $! "Fixing broken dependencies..."
+# --- MODULE HELPER FUNCTIONS (prefixed with _) ---
+
+# -----------------------------------------------------------------------------
+# Function: _apt_health_check()
+# Description: Checks for broken APT packages and provides a safe, interactive
+#              repair process with a dry-run confirmation step.
+# -----------------------------------------------------------------------------
+_apt_health_check() {
+    print_subheader "Checking APT Package Health"
+    
+    # Run the check, capturing output for analysis
+    if apt-get check 2>/dev/null; then
+        print_success "APT package integrity check passed. No broken packages found."
+        return
+    fi
+    
+    print_error "Broken packages or dependency issues detected."
+    if ! ask_yes_no "Do you want to see a simulation of the fix?"; then
+        print_warning "APT repair aborted by user."
+        return
     fi
 
-    print_subheader "Checking for failed systemd services..."
-    if systemctl --failed --quiet; then
-        print_error "Failed systemd services detected:"
-        systemctl --failed --no-pager
-        if ask_yes_no "Attempt to reset their failed state?"; then
-            systemctl reset-failed
-            print_success "Failed states reset. You may need to manually restart services."
-        fi
-    else
-        print_success "No failed systemd services found."
+    echo -e "\n${C_CYAN}--- APT Fix Simulation (Dry-Run) ---${C_RESET}"
+    echo "The following actions would be performed:"
+    # The '-s' flag simulates the action without making changes.
+    apt-get -s install -f -y
+    echo -e "${C_CYAN}--------------------------------------${C_RESET}"
+
+    if ! ask_yes_no "\nProceed with applying this fix?"; then
+        print_warning "APT repair aborted by user."
+        return
     fi
+
+    print_info "Attempting to fix APT issues..."
+    # Now run the actual commands, showing the user the output.
+    if dpkg --configure -a && apt-get install -f -y; then
+        print_success "APT issues have been resolved."
+    else
+        print_error "Failed to automatically resolve all APT issues. Manual intervention may be required."
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Function: _systemd_health_check()
+# Description: Interactively manages failed systemd services, allowing the
+#              user to view logs, restart, or reset individual services.
+# -----------------------------------------------------------------------------
+_systemd_health_check() {
+    print_subheader "Checking Systemd Service Status"
+    
+    # Get a clean list of failed service names into an array
+    mapfile -t failed_services < <(systemctl --failed --plain --no-legend | awk '{print $1}')
+
+    if [[ ${#failed_services[@]} -eq 0 ]]; then
+        print_success "No failed systemd services found."
+        return
+    fi
+
+    print_error "The following systemd services are in a 'failed' state:"
+    printf "  - %s\n" "${failed_services[@]}"
+
+    while true; do
+        echo -e "\n${C_MAGENTA}Select a service to manage, or choose a global action:${C_RESET}"
+        local options=("${failed_services[@]}" "Reset All Failed States" "Back to Diagnostics Menu")
+        
+        PS3="$(echo -e ${C_YELLOW}"Enter your choice: "${C_RESET})"
+        select opt in "${options[@]}"; do
+            # Check if the choice is one of the static options
+            if [[ "$opt" == "Reset All Failed States" ]]; then
+                if ask_yes_no "Are you sure you want to reset the state for ALL failed services?"; then
+                    systemctl reset-failed
+                    print_success "All failed states have been reset."
+                fi
+                break
+            elif [[ "$opt" == "Back to Diagnostics Menu" ]]; then
+                return
+            elif [[ -n "$opt" ]]; then
+                # An individual service was selected
+                print_subheader "Managing Service: $opt"
+                local service_actions=("View Logs (journalctl)" "Attempt Restart" "Reset State" "Back")
+                select action in "${service_actions[@]}"; do
+                    case $action in
+                        "View Logs (journalctl)") journalctl -u "$opt" -n 50 --no-pager ;;
+                        "Attempt Restart") systemctl restart "$opt" ;;
+                        "Reset State") systemctl reset-failed "$opt" ;;
+                        "Back") break ;;
+                        *) print_error "Invalid option." ;;
+                    esac
+                done
+                # After action, break to re-display the main service list
+                break
+            else
+                print_error "Invalid selection."
+            fi
+        done
+    done
+}
+
+# -----------------------------------------------------------------------------
+# Function: _filesystem_integrity_check()
+# Description: Performs a safe, read-only filesystem check (fsck) on all
+#              mountable, non-swap partitions listed in /etc/fstab.
+# -----------------------------------------------------------------------------
+_filesystem_integrity_check() {
+    print_subheader "Filesystem Integrity Check (Read-Only Scan)"
+    print_info "This performs a safe, non-destructive check on unmounted filesystems or a dry-run on mounted ones."
+    
+    # Parse fstab for valid, checkable filesystems (ext2/3/4, xfs, etc.)
+    # Ignore comments, swap, and filesystems with no pass number (0)
+    mapfile -t devices_to_check < <(awk '$1 !~ /^#/ && $3 !~ /swap/ && $6 > 0 {print $1}' /etc/fstab)
+
+    if [[ ${#devices_to_check[@]} -eq 0 ]]; then
+        print_warning "No filesystems configured for checking in /etc/fstab."
+        return
+    fi
+    
+    for device in "${devices_to_check[@]}"; do
+        print_info "Checking ${device}..."
+        # The '-n' flag ensures no changes are made to the filesystem.
+        if fsck -n "$device"; then
+            print_success "  - ${device}: No errors found."
+        else
+            print_error "  - ${device}: Potential errors detected. It is recommended to run fsck from a recovery environment."
+        fi
+    done
+}
+
+# -----------------------------------------------------------------------------
+# Function: _review_kernel_messages()
+# Description: Displays recent error and warning messages from the kernel
+#              ring buffer (dmesg) to help diagnose hardware/driver issues.
+# -----------------------------------------------------------------------------
+_review_kernel_messages() {
+    print_subheader "Review Kernel Ring Buffer (dmesg)"
+    print_info "Scanning for kernel-level errors and warnings. This can indicate hardware or driver problems."
+    
+    # Filter for error, warning, critical, alert, and emergency levels
+    local kernel_logs
+    kernel_logs=$(dmesg --level=err,warn,crit,alert,emerg)
+
+    if [[ -z "$kernel_logs" ]]; then
+        print_success "No recent errors or warnings found in the kernel ring buffer."
+    else
+        print_warning "The following issues were reported by the kernel:"
+        # Use less to allow scrolling through potentially long logs
+        echo "$kernel_logs" | less
+    fi
+}
+
+
+# -----------------------------------------------------------------------------
+# Function: run_diagnostics_repair()
+# Description: Main entry point for the Diagnostics & Repair suite. Presents a
+#              menu of advanced diagnostic tools for system troubleshooting.
+# -----------------------------------------------------------------------------
+run_diagnostics_repair() {
+    while true; do
+        print_header "Module: Diagnostics & Repair Suite"
+        local options=(
+            "APT Package Health Check & Repair"
+            "Systemd Service Status & Management"
+            "Filesystem Integrity Check (Read-Only)"
+            "Review Kernel Messages (dmesg)"
+            "Back to Main Menu"
+        )
+        
+        PS3="$(echo -e ${C_YELLOW}"Select a diagnostic tool to run: "${C_RESET})"
+        select opt in "${options[@]}"; do
+            case $opt in
+                "APT Package Health Check & Repair") _apt_health_check; break ;;
+                "Systemd Service Status & Management") _systemd_health_check; break ;;
+                "Filesystem Integrity Check (Read-Only)") _filesystem_integrity_check; break ;;
+                "Review Kernel Messages (dmesg)") _review_kernel_messages; break ;;
+                "Back to Main Menu") return ;;
+                *) print_error "Invalid selection." ;;
+            esac
+        done
+        press_enter_to_continue
+    done
 }
 
 # --- SECTION 10: MODULE - NETWORK TOOLS ---
