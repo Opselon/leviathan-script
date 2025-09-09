@@ -128,35 +128,89 @@ ask_yes_no() {
 # Returns: None (or exits if dependencies can't be installed)
 # -----------------------------------------------------------------------------
 check_dependencies() {
-    local missing_deps=()
-    # Expanded list for all new and existing modules
-    local required_commands=(
-        "curl" "git" "rsync" "ufw" "nproc" "lsblk" "lspci" "dmidecode"
-        "smartctl" "lynis" "fail2ban" "chkrootkit" "docker" "qemu-system-x86"
-        "virsh" "openssl" "aircrack-ng" "gparted" "testdisk" "binwalk"
-        "ghidra" "wireshark-cli" "nmap" "netstat" "nload" "lm-sensors" "bc"
-        "figlet" "xmlstarlet"
+    print_info "Checking for required system commands..."
+    
+    # We separate dependencies into "core" and "optional"
+    # Core are needed for the script to basically function.
+    # Optional are needed for specific modules.
+    local core_deps=("curl" "git" "rsync" "nproc" "lsblk" "bc" "figlet")
+    local optional_deps=(
+        "ufw" "smartctl" "lynis" "fail2ban" "chkrootkit" "docker"
+        "qemu-system-x86" "virsh" "openssl" "aircrack-ng" "gparted"
+        "testdisk" "binwalk" "ghidra" "wireshark-cli" "nmap" "netstat"
+        "nload" "lm-sensors" "xmlstarlet"
     )
 
-    print_info "Checking for required system commands..."
-    for cmd in "${required_commands[@]}"; do
+    local all_deps=("${core_deps[@]}" "${optional_deps[@]}")
+    local missing_deps=()
+    for cmd in "${all_deps[@]}"; do
         if ! command -v "$cmd" &> /dev/null; then
             missing_deps+=("$cmd")
         fi
     done
 
-    if [[ ${#missing_deps[@]} -gt 0 ]]; then
-        print_error "The following dependencies are missing: ${missing_deps[*]}"
-        if ask_yes_no "Shall I attempt to install them now?"; then
-            (
-                apt-get update
-                apt-get install -y "${missing_deps[@]}"
-            ) &> /dev/null & spinner $! "Installing missing dependencies..."
-            print_success "Dependencies installed."
-        else
-            print_fatal "Cannot continue without required dependencies. Aborting."
-        fi
+    if [[ ${#missing_deps[@]} -eq 0 ]]; then
+        print_success "All dependencies are satisfied."
+        return
     fi
+
+    print_error "Some dependencies are missing. Leviathan may not function fully."
+    echo -e "${C_YELLOW}Missing packages:${C_RESET} ${missing_deps[*]}"
+    
+    # Loop until the user decides to continue or quit
+    while true; do
+        echo
+        print_subheader "How would you like to proceed?"
+        local options=("Install all missing packages" "Let me choose which packages to install" "Skip installation for now (some features will be disabled)" "Exit Leviathan")
+        select opt in "${options[@]}"; do
+            case $opt in
+                "Install all missing packages")
+                    install_packages "${missing_deps[@]}"
+                    # Re-check to see what's left
+                    check_dependencies
+                    return
+                    ;;
+                "Let me choose which packages to install")
+                    # This is a more complex menu using a while loop for selection
+                    local to_install=()
+                    local choices=("${missing_deps[@]}")
+                    local chosen
+                    # We'll use a simple indexed prompt for this
+                    PS3="Select packages to install (press Enter to finish): "
+                    select pkg in "${choices[@]}"; do
+                        if [[ -n "$pkg" ]]; then
+                            to_install+=("$pkg")
+                            echo "Added $pkg to installation list."
+                        else
+                            # User pressed Enter
+                            break
+                        fi
+                    done
+                    PS3="Select an option: " # Reset PS3 prompt
+                    
+                    if [[ ${#to_install[@]} -gt 0 ]]; then
+                        install_packages "${to_install[@]}"
+                        # Re-check after installation attempt
+                        check_dependencies
+                        return
+                    else
+                        print_info "No packages were selected."
+                    fi
+                    break # Break from the select, go back to the outer while loop
+                    ;;
+                "Skip installation for now (some features will be disabled)")
+                    print_warning "Skipping dependency installation. Modules requiring missing tools will fail."
+                    return
+                    ;;
+                "Exit Leviathan")
+                    print_fatal "Aborting due to missing dependencies as requested by user."
+                    ;;
+                *) 
+                    print_error "Invalid option. Please try again."
+                    ;;
+            esac
+        done
+    done
 }
 
 # -----------------------------------------------------------------------------
