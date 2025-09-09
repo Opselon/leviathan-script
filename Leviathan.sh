@@ -897,41 +897,200 @@ run_diagnostics_repair() {
 # Parameters: None
 # Returns: None
 # -----------------------------------------------------------------------------
-network_tools_menu() {
-    print_header "Module: Network Tools"
+# --- MODULE HELPER FUNCTIONS (prefixed with _) ---
+
+# -----------------------------------------------------------------------------
+# Function: _show_active_connections()
+# Description: Displays active TCP, UDP, and listening sockets using the
+#              modern 'ss' command, replacing the deprecated 'netstat'.
+# -----------------------------------------------------------------------------
+_show_active_connections() {
+    print_subheader "Active Connections & Listening Ports (ss)"
+    # ss is faster and provides more info than netstat.
+    # -t(cp), -u(dp), -l(istening), -n(umeric), -p(rocesses)
+    ss -tulnp
+}
+
+# -----------------------------------------------------------------------------
+# Function: _connectivity_menu()
+# Description: Provides a sub-menu for fundamental network connectivity
+#              and interface diagnostics.
+# -----------------------------------------------------------------------------
+_connectivity_menu() {
+    print_header "Interface & Connectivity Tools"
+    # Note: For these tools to work, 'mtr-tiny' and 'dnsutils' (for dig)
+    # should be added to the main dependency check list.
+    
     local options=(
-        "Show Active Connections (netstat)"
-        "Live Bandwidth Monitoring (nload)"
-        "Run a Speed Test (speedtest-cli)"
-        "Scan Local Network for Hosts (nmap)"
-        "Back to Main Menu"
+        "Show IP Addresses (ip addr)"
+        "Test Host Connectivity (ping)"
+        "Trace Network Path (mtr)"
+        "Query DNS Records (dig)"
+        "Show Active Connections (ss)"
+        "Back to Network Menu"
     )
+    
+    PS3="$(echo -e ${C_YELLOW}"Select a connectivity tool: "${C_RESET})"
     select opt in "${options[@]}"; do
         case $opt in
-            "Show Active Connections (netstat)")
-                print_subheader "Active TCP/UDP Connections"
-                netstat -tulnp
+            "Show IP Addresses (ip addr)")
+                print_subheader "Displaying Network Interfaces"
+                ip -c addr
                 ;;
-            "Live Bandwidth Monitoring (nload)")
-                print_info "Starting nload. Press Ctrl+C to exit."
-                nload
+            "Test Host Connectivity (ping)")
+                print_subheader "Ping Host"
+                read -rp "Enter hostname or IP to ping [default: 8.8.8.8]: " target
+                target=${target:-"8.8.8.8"}
+                ping -c 5 "$target"
                 ;;
-            "Run a Speed Test (speedtest-cli)")
-                print_subheader "Running Internet Speed Test"
-                curl -s https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python3 -
+            "Trace Network Path (mtr)")
+                print_subheader "My Traceroute (mtr)"
+                if ! command -v mtr &>/dev/null; then
+                    print_error "'mtr' is not installed. Please install 'mtr-tiny' to use this feature."
+                    break
+                fi
+                read -rp "Enter hostname or IP to trace [default: 8.8.8.8]: " target
+                target=${target:-"8.8.8.8"}
+                mtr "$target"
                 ;;
-            "Scan Local Network for Hosts (nmap)")
-                print_subheader "Nmap Host Discovery Scan"
-                local ip_range
-                local default_range
-                default_range=$(ip -o -f inet addr show | awk '/scope global/ {print $4}' | head -n1 | sed 's/\.[0-9]\+\/[0-9]\+$/.0\/24/')
-                read -rp "Enter IP range to scan (e.g., 192.168.1.0/24) [default: $default_range]: " ip_range
-                ip_range=${ip_range:-$default_range}
-                nmap -sn "$ip_range"
+            "Query DNS Records (dig)")
+                print_subheader "DNS Lookup (dig)"
+                if ! command -v dig &>/dev/null; then
+                    print_error "'dig' is not installed. Please install 'dnsutils' to use this feature."
+                    break
+                fi
+                read -rp "Enter domain to query [default: google.com]: " domain
+                domain=${domain:-"google.com"}
+                dig "$domain"
                 ;;
-            "Back to Main Menu") break ;;
-            *) print_error "Invalid option." ;;
+            "Show Active Connections (ss)")
+                _show_active_connections
+                ;;
+            "Back to Network Menu")
+                return
+                ;;
+            *) print_error "Invalid selection." ;;
         esac
+        break
+    done
+}
+
+# -----------------------------------------------------------------------------
+# Function: _run_speed_test()
+# Description: Executes an internet speed test, preferring the official CLI
+#              package and falling back to a curl script if necessary.
+# -----------------------------------------------------------------------------
+_run_speed_test() {
+    print_subheader "Running Internet Speed Test"
+    
+    if command -v speedtest-cli &>/dev/null; then
+        print_info "Using the 'speedtest-cli' package..."
+        speedtest-cli
+    elif command -v speedtest &>/dev/null; then
+        print_info "Using the official Ookla 'speedtest' CLI..."
+        speedtest --accept-license --accept-gdpr
+    else
+        print_warning "No local speedtest client found. Falling back to python script method."
+        print_info "This requires python3 to be installed."
+        if command -v python3 &>/dev/null; then
+            curl -s https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python3 -
+        else
+            print_error "python3 is not installed. Cannot run the speedtest script."
+        fi
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Function: _nmap_scanner_menu()
+# Description: Provides a powerful sub-menu for running various types of
+#              nmap scans against a target network range.
+# -----------------------------------------------------------------------------
+_nmap_scanner_menu() {
+    print_header "Advanced Network Scanning (Nmap)"
+    
+    # Auto-detect a sensible default IP range
+    local default_range
+    default_range=$(ip -o -f inet addr show | awk '/scope global/ {print $4}' | head -n1 | sed 's/\.[0-9]\+\/[0-9]\+$/.0\/24/')
+    
+    read -rp "Enter target IP or range (e.g., 192.168.1.0/24) [default: $default_range]: " target_range
+    target_range=${target_range:-$default_range}
+
+    local scan_options=(
+        "Quick Scan (Host Discovery Only)"
+        "Standard Scan (Top 1000 TCP Ports)"
+        "Aggressive Scan (OS & Version Detection, Scripts)"
+        "Full TCP Port Scan (All 65535 Ports)"
+        "Back to Network Menu"
+    )
+
+    PS3="$(echo -e ${C_YELLOW}"Select a scan type to run on '${target_range}': "${C_RESET})"
+    select scan_type in "${scan_options[@]}"; do
+        case $scan_type in
+            "Quick Scan (Host Discovery Only)")
+                print_info "Running a simple ping scan to discover live hosts..."
+                nmap -sn "$target_range"
+                ;;
+            "Standard Scan (Top 1000 TCP Ports)")
+                print_info "Scanning for the most common open TCP ports..."
+                nmap -T4 -F "$target_range"
+                ;;
+            "Aggressive Scan (OS & Version Detection, Scripts)")
+                print_warning "This is an intrusive scan. It is loud and can take time."
+                nmap -A "$target_range"
+                ;;
+            "Full TCP Port Scan (All 65535 Ports)")
+                print_warning "This is a VERY slow scan. It can take hours depending on the target."
+                if ask_yes_no "Are you absolutely sure you want to run a full port scan?"; then
+                    nmap -p- "$target_range"
+                else
+                    print_info "Full port scan aborted."
+                fi
+                ;;
+            "Back to Network Menu")
+                return
+                ;;
+            *) print_error "Invalid selection." ;;
+        esac
+        break
+    done
+}
+
+# -----------------------------------------------------------------------------
+# Function: network_tools_menu()
+# Description: Main entry point for the Network Operations Center. It presents
+#              a menu of network tool categories for the user.
+# -----------------------------------------------------------------------------
+network_tools_menu() {
+    while true; do
+        print_header "Module: Network Operations Center"
+        local options=(
+            "Interface & Connectivity Diagnostics"
+            "Live Bandwidth Monitoring (nload)"
+            "Advanced Network Scanning (Nmap)"
+            "Internet Speed Test"
+            "Back to Main Menu"
+        )
+        
+        PS3="$(echo -e ${C_YELLOW}"Select a tool category: "${C_RESET})"
+        select opt in "${options[@]}"; do
+            case $opt in
+                "Interface & Connectivity Diagnostics") _connectivity_menu; break ;;
+                "Live Bandwidth Monitoring (nload)")
+                    if ! command -v nload &>/dev/null; then
+                        print_error "'nload' is not installed. Please install it to use this feature."
+                    else
+                        print_info "Starting nload. Press Ctrl+C or 'q' to exit."
+                        nload
+                    fi
+                    break
+                    ;;
+                "Advanced Network Scanning (Nmap)") _nmap_scanner_menu; break ;;
+                "Internet Speed Test") _run_speed_test; break ;;
+                "Back to Main Menu") return ;;
+                *) print_error "Invalid selection." ;;
+            esac
+        done
+        press_enter_to_continue
     done
 }
 
